@@ -56,17 +56,6 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
     protected $redis = null;
 
 
-    /**
-     * Construct
-     *
-     */
-    public function __construct()
-    {
-        parent::__construct();
-        /* $this->set('useIP', 0); // track IP address? */
-        /* $this->set('useUA', 0); // track query string? */
-    }
-
 
     /**
      *
