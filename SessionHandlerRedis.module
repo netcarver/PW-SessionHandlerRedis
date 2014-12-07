@@ -22,7 +22,7 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule
+class SessionHandlerRedis extends WireSessionHandler implements Module/*, ConfigurableModule */
 {
     /**
      * Default settings used by this module
@@ -145,71 +145,52 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
      * Session Handler Redis configuration options
      *
      */
-    public static function getModuleConfigInputfields(array $data)
-    {
-        $fields = new InputfieldWrapper();
-        $data   = array_merge(self::$defaultSettings, $data);
-        $m      = wire('modules');
+    /* public static function getModuleConfigInputfields(array $data) */
+    /* { */
+    /*     $fields = new InputfieldWrapper(); */
+    /*     $data   = array_merge(self::$defaultSettings, $data); */
+    /*     $m      = wire('modules'); */
 
-        $f = $m->get("InputfieldMarkup");
-        $f->label = __("Redis Configuration Notes.", __FILE__);
-        $f->value = __(
-            "<p>Please supply details of the Redis server you'd like to host your sessions on.<br>" .
-            "By default Redis listens on 127.0.0.1 port 6379 but is often listening on specific IP addresses.</p>",
-            __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldMarkup"); */
+    /*     $f->label = __("Redis Configuration Notes.", __FILE__); */
+    /*     $f->value = __( */
+    /*         "<p>Please supply details of the Redis server you'd like to host your sessions on.<br>" . */
+    /*         "By default Redis listens on 127.0.0.1 port 6379 but is often listening on specific IP addresses.</p>", */
+    /*         __FILE__); */
+    /*     $fields->add($f); */
 
-        $f = $m->get("InputfieldText");
-        $f->attr('name', 'shr_server_ip');
-        $f->attr('value', $data['shr_server_ip']);
-        $f->label = __("The IPv4 address of the Redis server hosting your sessions.", __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldText"); */
+    /*     $f->attr('name', 'shr_server_ip'); */
+    /*     $f->attr('value', $data['shr_server_ip']); */
+    /*     $f->label = __("The IPv4 address of the Redis server hosting your sessions.", __FILE__); */
+    /*     $fields->add($f); */
 
-        $f = $m->get("InputfieldInteger");
-        $f->attr('name', 'shr_server_port');
-        $f->attr('value', $data['shr_server_port']);
-        $f->label = __("The port that your Redis server is listening on.", __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldInteger"); */
+    /*     $f->attr('name', 'shr_server_port'); */
+    /*     $f->attr('value', $data['shr_server_port']); */
+    /*     $f->label = __("The port that your Redis server is listening on.", __FILE__); */
+    /*     $fields->add($f); */
 
-        $f = $m->get("InputfieldInteger");
-        $f->attr('name', 'shr_server_db');
-        $f->attr('value', $data['shr_server_db']);
-        $f->label = __("The redis database to use for storing session entries. If in doubt leave as '0'.", __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldInteger"); */
+    /*     $f->attr('name', 'shr_server_db'); */
+    /*     $f->attr('value', $data['shr_server_db']); */
+    /*     $f->label = __("The redis database to use for storing session entries. If in doubt leave as '0'.", __FILE__); */
+    /*     $fields->add($f); */
 
-        $f = $m->get("InputfieldText");
-        $f->attr('name', 'shr_prefix');
-        $f->attr('value', $data['shr_prefix']);
-        $f->label = __("What prefix is to be used when creating the redis storage key from a session ID?", __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldText"); */
+    /*     $f->attr('name', 'shr_prefix'); */
+    /*     $f->attr('value', $data['shr_prefix']); */
+    /*     $f->label = __("What prefix is to be used when creating the redis storage key from a session ID?", __FILE__); */
+    /*     $fields->add($f); */
 
-        $f = $m->get("InputfieldInteger");
-        $f->attr('name', 'shr_ttl');
-        $f->attr('value', $data['shr_ttl']);
-        $f->label = __("How long (in seconds) should idle sessions live for before they die?", __FILE__);
-        $fields->add($f);
+    /*     $f = $m->get("InputfieldInteger"); */
+    /*     $f->attr('name', 'config->redis_session_server_ttl'); */
+    /*     $f->attr('value', $data['config->redis_session_server_ttl']); */
+    /*     $f->label = __("How long (in seconds) should idle sessions live for before they die?", __FILE__); */
+    /*     $fields->add($f); */
 
-        /* $description = __('Checking this box will enable the data to be displayed in your admin sessions list.', __FILE__); */
-
-        /* $f = $m->get('InputfieldCheckbox'); */
-        /* $f->attr('name', 'useIP'); */
-        /* $f->attr('value', 1); */
-        /* $f->attr('checked', empty($data['useIP']) ? '' : 'checked'); */
-        /* $f->label = __('Track IP addresses in session data?', __FILE__); */
-        /* $f->description = $description; */
-        /* $fields->add($f); */
-
-        /* $f = $m->get('InputfieldCheckbox'); */
-        /* $f->attr('name', 'useUA'); */
-        /* $f->attr('value', 1); */
-        /* $f->attr('checked', empty($data['useUA']) ? '' : 'checked'); */
-        /* $f->label = __('Track user agent in session data?', __FILE__); */
-        /* $f->notes = __('The user agent typically contains information about the browser being used.', __FILE__); */
-        /* $f->description = $description; */
-        /* $fields->add($f); */
-
-        return $fields;
-    }
+    /*     return $fields; */
+    /* } */
 
 
     /**
