@@ -3,183 +3,232 @@
 /**
  * Session handler for storing sessions to Redis
  *
+ * Redis is an extremely fast in-memory data-store. Using it allows PW installations running on different machines to
+ * access a centralised session server.
+ *
  * @see /wire/core/SessionHandler.php
  * @see /wire/modules/Session/SessionHandlerDB.module
  *
- * Copyright (C) 2014 Stephen Dickinson, QBox.co
+ * Copyright (c) 2014 Stephen Dickinson, QBox.
  *
+ * The above copyright notice and the following permissions and disclaimer shall be included in all copies or
+ * substantial portions of the Software.
+ *
+ * DO NOT DISTRIBUTE UNLESS PERMITTED UNDER THE TERMS OF YOUR LICENSE FROM QBox.co.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+ * WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule
 {
+    /**
+     * Default settings used by this module
+     */
+    static protected $defaultSettings = array(
+        'shr_server_ip'   => '127.0.0.1',
+        'shr_server_port' => 6379,
+        'shr_server_db'   => 0,
+        'shr_prefix'      => 'PHPSESSID:',
+        'shr_ttl'         => 1800,
+    );
+
 
     public static function getModuleInfo()
     {
-		return array(
+        return array(
             'title'    => __('Session Handler Redis', __FILE__),
-			'version'  => 1,
-			'summary'  => __("Installing this module makes ProcessWire store sessions in a Redis database rather than the file system. Note that this module will log you out after install or uninstall.", __FILE__),
+            'version'  => 1,
+            'summary'  => __("Installing this module makes ProcessWire store sessions in a Redis database rather than the file system. Note that this module will log you out after install or uninstall.", __FILE__),
             'author'   => 'S. Dickinson, QBox.co',
             'autoload' => true,
             'singular' => true,
-			#'installs' => array('ProcessSessionDB')
-			);
-	}
-
-
-	/**
-	 * Redis DB to use
-	 *
-	 */
-	const $dbName = 1;
-
-
-	/**
-	 * Quick reference to redis
-	 *
-	 */
-	protected $database;
-
-
-	/**
-	 * Construct
-	 *
-	 */
-    public function __construct()
-    {
-		parent::__construct();
-		$this->database = null;
-		$this->set('useIP', 0); // track IP address?
-		$this->set('useUA', 0); // track query string?
-        $this->set('ttl', 1800);
-        $this->set('prefix', 'PHPSESSID');
-	}
-
-    public $ttl = 1800; // 30 minutes default
-    protected $db;
-    protected $prefix;
-
-
-    public function close() {
-        unset($this->database);
-        $this->database = null;
+        );
     }
 
 
+    /**
+     * Quick reference to redis
+     *
+     */
+    protected $redis = null;
 
-	/**
-	 * Read and return data for session indicated by $id
-	 *
-	 * @param string $id Session ID
-	 * @return string Serialized data or blank string if none
-	 *
-	 */
+
+    /**
+     * Construct
+     *
+     */
+    public function __construct()
+    {
+        parent::__construct();
+        $this->set('useIP', 0); // track IP address?
+        $this->set('useUA', 0); // track query string?
+    }
+
+
+    /**
+     *
+     */
+    public function init()
+    {
+        parent::init();
+        if (null === $this->redis) {
+            $this->redis = new \Redis();
+            $this->redis->pconnect($this->shr_server_ip, $this->shr_server_port);
+            $this->redis->select($this->shr_server_db);
+        }
+    }
+
+
+    public function close() {
+        unset($this->redis);
+        $this->redis = null;
+    }
+
+
+    protected function key($id)
+    {
+        return $this->shr_prefix . $id;
+    }
+
+    /**
+     * Read and return data for session indicated by $id
+     *
+     * @param string $id Session ID
+     * @return string Serialized data or blank string if none
+     *
+     */
     public function read($id)
     {
-        $id = $this->prefix . $id;
-        $sessData = $this->db->get($id);
-        $this->db->expire($id, $this->ttl);
-        return $sessData;
-	}
+        $key = $this->key($id);
+        $data = $this->redis->get($key);
+        $this->redis->expire($key, $this->shr_ttl);
+        return $data;
+    }
 
 
-	/**
-	 * Write the given $data for the given session ID
-	 *
-	 * @param string $id Session ID
-	 * @param string Serialized data to write
-	 * @return bool
-	 *
-	 */
+    /**
+     * Write the given $data for the given session ID
+     *
+     * @param string $id Session ID
+     * @param string Serialized data to write
+     * @return bool
+     *
+     */
     public function write($id, $data)
     {
-        $id = $this->prefix . $id;
-        $this->db->set($id, $data);
-        $this->db->expire($id, $this->ttl);
-	}
+        $key = $this->key($id);
+        $this->redis->set($key, $data);
+        $this->redis->expire($key, $this->shr_ttl);
+    }
 
 
-	/**
-	 * Destroy the session indicated by the given session ID
-	 *
-	 * @param string $id Session ID
-	 * @return bool True on success, false on failure
-	 *
-	 */
+    /**
+     * Destroy the session indicated by the given session ID
+     *
+     * @param string $id Session ID
+     * @return bool True on success, false on failure
+     *
+     */
     public function destroy($id)
     {
-        $this->db->del($this->prefix . $id);
-	}
+        $key = $this->key($id);
+        $this->redis->del($key);
+    }
 
 
-	/**
-	 * Garbage collection: remove stale sessions
-	 *
-	 * @param int $seconds Max lifetime of a session
-	 * @return bool True on success, false on failure
-	 *
-	 */
+    /**
+     * Garbage collection: remove stale sessions
+     *
+     * @param int $seconds Max lifetime of a session
+     * @return bool True on success, false on failure
+     *
+     */
     public function gc($seconds)
     {
         // Intentionally empty. We use the Redis TTL feature to do garbage collection.
-	}
+    }
 
 
-	/**
-	 * Session Handler Redis configuration options
-	 *
-	 */
+    /**
+     * Session Handler Redis configuration options
+     *
+     */
     public static function getModuleConfigInputfields(array $data)
     {
-		$form = new InputfieldWrapper();
+        $fields = new InputfieldWrapper();
+        $data   = array_merge(self::$defaultSettings, $data);
+        $m      = wire('modules');
 
-		$description = __('Checking this box will enable the data to be displayed in your admin sessions list.', __FILE__);
+        $f = $m->get("InputfieldMarkup");
+        $f->label = __("Redis Configuration Notes.", __FILE__);
+        $f->value = __(
+            "<p>Please supply details of the Redis server you'd like to host your thread-safe counters on.<br>" .
+            "By default Redis listens on 127.0.0.1 port 6379 but is often listening on specific IP addresses.</p>",
+            __FILE__);
+        $fields->add($f);
 
-		$f = wire('modules')->get('InputfieldCheckbox');
-		$f->attr('name', 'useIP');
-		$f->attr('value', 1);
-		$f->attr('checked', empty($data['useIP']) ? '' : 'checked');
-		$f->label = __('Track IP addresses in session data?', __FILE__);
-		$f->description = $description;
-		$form->add($f);
+        $f = $m->get("InputfieldText");
+        $f->attr('name', 'shr_redis_server_ip');
+        $f->attr('value', $data['shr_redis_server_ip']);
+        $f->label = __("The IPv4 address of the Redis server hosting your counters.", __FILE__);
+        $fields->add($f);
 
-		$f = wire('modules')->get('InputfieldCheckbox');
-		$f->attr('name', 'useUA');
-		$f->attr('value', 1);
-		$f->attr('checked', empty($data['useUA']) ? '' : 'checked');
-		$f->label = __('Track user agent in session data?', __FILE__);
-		$f->notes = __('The user agent typically contains information about the browser being used.', __FILE__);
-		$f->description = $description;
-		$form->add($f);
+        $f = $m->get("InputfieldInteger");
+        $f->attr('name', 'shr_redis_server_port');
+        $f->attr('value', $data['shr_redis_server_port']);
+        $f->label = __("The port that your Redis server is listening on.", __FILE__);
+        $fields->add($f);
 
-		return $form;
-	}
+        /* $description = __('Checking this box will enable the data to be displayed in your admin sessions list.', __FILE__); */
+
+        /* $f = $m->get('InputfieldCheckbox'); */
+        /* $f->attr('name', 'useIP'); */
+        /* $f->attr('value', 1); */
+        /* $f->attr('checked', empty($data['useIP']) ? '' : 'checked'); */
+        /* $f->label = __('Track IP addresses in session data?', __FILE__); */
+        /* $f->description = $description; */
+        /* $fields->add($f); */
+
+        /* $f = $m->get('InputfieldCheckbox'); */
+        /* $f->attr('name', 'useUA'); */
+        /* $f->attr('value', 1); */
+        /* $f->attr('checked', empty($data['useUA']) ? '' : 'checked'); */
+        /* $f->label = __('Track user agent in session data?', __FILE__); */
+        /* $f->notes = __('The user agent typically contains information about the browser being used.', __FILE__); */
+        /* $f->description = $description; */
+        /* $fields->add($f); */
+
+        return $fields;
+    }
 
 
-	/**
-	 * Provides direct reference access to set values in the $data array
-	 *
-	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
-	 *
-	 */
+    /**
+     * Provides direct reference access to set values in the $data array
+     *
+     * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+     *
+     */
     public function __set($key, $value)
     {
-		$this->set($key, $value);
-	}
+        $this->set($key, $value);
+    }
 
 
-	/**
-	 * Provides direct reference access to variables in the $data array
-	 *
-	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
-	 *
-	 * Otherwise the same as get()
-	 *
-	 * @param string $key
-	 *
-	 */
+    /**
+     * Provides direct reference access to variables in the $data array
+     *
+     * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+     *
+     * Otherwise the same as get()
+     *
+     * @param string $key
+     *
+     */
     public function __get($key)
     {
-		return $this->get($key);
-	}
+        return $this->get($key);
+    }
 }
