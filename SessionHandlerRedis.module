@@ -1,0 +1,185 @@
+<?php
+
+/**
+ * Session handler for storing sessions to Redis
+ *
+ * @see /wire/core/SessionHandler.php
+ * @see /wire/modules/Session/SessionHandlerDB.module
+ *
+ * Copyright (C) 2014 Stephen Dickinson, QBox.co
+ *
+ */
+
+class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule
+{
+
+    public static function getModuleInfo()
+    {
+		return array(
+            'title'    => __('Session Handler Redis', __FILE__),
+			'version'  => 1,
+			'summary'  => __("Installing this module makes ProcessWire store sessions in a Redis database rather than the file system. Note that this module will log you out after install or uninstall.", __FILE__),
+            'author'   => 'S. Dickinson, QBox.co',
+            'autoload' => true,
+            'singular' => true,
+			#'installs' => array('ProcessSessionDB')
+			);
+	}
+
+
+	/**
+	 * Redis DB to use
+	 *
+	 */
+	const $dbName = 1;
+
+
+	/**
+	 * Quick reference to redis
+	 *
+	 */
+	protected $database;
+
+
+	/**
+	 * Construct
+	 *
+	 */
+    public function __construct()
+    {
+		parent::__construct();
+		$this->database = null;
+		$this->set('useIP', 0); // track IP address?
+		$this->set('useUA', 0); // track query string?
+        $this->set('ttl', 1800);
+        $this->set('prefix', 'PHPSESSID');
+	}
+
+    public $ttl = 1800; // 30 minutes default
+    protected $db;
+    protected $prefix;
+
+
+    public function close() {
+        unset($this->database);
+        $this->database = null;
+    }
+
+
+
+	/**
+	 * Read and return data for session indicated by $id
+	 *
+	 * @param string $id Session ID
+	 * @return string Serialized data or blank string if none
+	 *
+	 */
+    public function read($id)
+    {
+        $id = $this->prefix . $id;
+        $sessData = $this->db->get($id);
+        $this->db->expire($id, $this->ttl);
+        return $sessData;
+	}
+
+
+	/**
+	 * Write the given $data for the given session ID
+	 *
+	 * @param string $id Session ID
+	 * @param string Serialized data to write
+	 * @return bool
+	 *
+	 */
+    public function write($id, $data)
+    {
+        $id = $this->prefix . $id;
+        $this->db->set($id, $data);
+        $this->db->expire($id, $this->ttl);
+	}
+
+
+	/**
+	 * Destroy the session indicated by the given session ID
+	 *
+	 * @param string $id Session ID
+	 * @return bool True on success, false on failure
+	 *
+	 */
+    public function destroy($id)
+    {
+        $this->db->del($this->prefix . $id);
+	}
+
+
+	/**
+	 * Garbage collection: remove stale sessions
+	 *
+	 * @param int $seconds Max lifetime of a session
+	 * @return bool True on success, false on failure
+	 *
+	 */
+    public function gc($seconds)
+    {
+        // Intentionally empty. We use the Redis TTL feature to do garbage collection.
+	}
+
+
+	/**
+	 * Session Handler Redis configuration options
+	 *
+	 */
+    public static function getModuleConfigInputfields(array $data)
+    {
+		$form = new InputfieldWrapper();
+
+		$description = __('Checking this box will enable the data to be displayed in your admin sessions list.', __FILE__);
+
+		$f = wire('modules')->get('InputfieldCheckbox');
+		$f->attr('name', 'useIP');
+		$f->attr('value', 1);
+		$f->attr('checked', empty($data['useIP']) ? '' : 'checked');
+		$f->label = __('Track IP addresses in session data?', __FILE__);
+		$f->description = $description;
+		$form->add($f);
+
+		$f = wire('modules')->get('InputfieldCheckbox');
+		$f->attr('name', 'useUA');
+		$f->attr('value', 1);
+		$f->attr('checked', empty($data['useUA']) ? '' : 'checked');
+		$f->label = __('Track user agent in session data?', __FILE__);
+		$f->notes = __('The user agent typically contains information about the browser being used.', __FILE__);
+		$f->description = $description;
+		$form->add($f);
+
+		return $form;
+	}
+
+
+	/**
+	 * Provides direct reference access to set values in the $data array
+	 *
+	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+	 *
+	 */
+    public function __set($key, $value)
+    {
+		$this->set($key, $value);
+	}
+
+
+	/**
+	 * Provides direct reference access to variables in the $data array
+	 *
+	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+	 *
+	 * Otherwise the same as get()
+	 *
+	 * @param string $key
+	 *
+	 */
+    public function __get($key)
+    {
+		return $this->get($key);
+	}
+}
