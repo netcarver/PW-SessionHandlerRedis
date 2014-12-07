@@ -182,6 +182,12 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f->label = __("The port that your Redis server is listening on.", __FILE__);
         $fields->add($f);
 
+        $f = $m->get("InputfieldInteger");
+        $f->attr('name', 'shr_server_db');
+        $f->attr('value', $data['shr_server_db']);
+        $f->label = __("The redis database to use for storing session entries. If in doubt leave as '0'.", __FILE__);
+        $fields->add($f);
+
         /* $description = __('Checking this box will enable the data to be displayed in your admin sessions list.', __FILE__); */
 
         /* $f = $m->get('InputfieldCheckbox'); */
