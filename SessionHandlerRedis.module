@@ -173,7 +173,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f = $m->get("InputfieldText");
         $f->attr('name', 'shr_server_ip');
         $f->attr('value', $data['shr_server_ip']);
-        $f->label = __("The IPv4 address of the Redis server hosting your counters.", __FILE__);
+        $f->label = __("The IPv4 address of the Redis server hosting your sessions.", __FILE__);
         $fields->add($f);
 
         $f = $m->get("InputfieldInteger");
