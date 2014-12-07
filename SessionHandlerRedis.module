@@ -24,17 +24,6 @@
 
 class SessionHandlerRedis extends WireSessionHandler implements Module/*, ConfigurableModule */
 {
-    /**
-     * Default settings used by this module
-     */
-    static protected $defaultSettings = array(
-        'shr_server_ip'   => '127.0.0.1',
-        'shr_server_port' => 6379,
-        'shr_server_db'   => 0,
-        'shr_prefix'      => 'PHPSESSID:',
-        'shr_ttl'         => 1800,
-    );
-
 
     public static function getModuleInfo()
     {
@@ -60,27 +49,55 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     /**
      *
      */
-    public function init()
+    public function open($path, $name)
     {
-        parent::init();
         if (null === $this->redis) {
+
+            // Read/set the config values from the defaults if not defined in the config file...
+            if (!$this->config->has('redis_session_server_ip')) {
+                $this->config->set('redis_session_server_ip', '127.0.0.1');
+            }
+
+            if (!$this->config->has('redis_session_server_port')) {
+                $this->config->set('redis_session_server_port', 6379);
+            }
+
+            if (!$this->config->has('redis_session_server_db')) {
+                $this->config->set('redis_session_server_db', 0);
+            }
+
+            if (!$this->config->has('redis_session_server_ttl')) {
+                $this->config->set('redis_session_server_ttl', 1800);
+            }
+
+            if (!$this->config->has('redis_session_server_prefix')) {
+                $this->config->set('redis_session_server_prefix', 'PHPSESSID:');
+            }
+
             $this->redis = new \Redis();
-            $this->redis->pconnect($this->shr_server_ip, $this->shr_server_port);
-            $this->redis->select($this->shr_server_db);
+            $this->redis->pconnect($this->config->redis_session_server_ip, $this->config->redis_session_server_port);
+            $this->redis->select($this->config->redis_session_server_db);
         }
+
+        return true;
     }
 
 
     public function close() {
-        unset($this->redis);
-        $this->redis = null;
+        if (null !== $this->redis) {
+            unset($this->redis);
+            $this->redis = null;
+        }
+
+        return true;
     }
 
 
     protected function key($id)
     {
-        return $this->shr_prefix . $id;
+        return $this->config->redis_session_server_prefix . $id;
     }
+
 
     /**
      * Read and return data for session indicated by $id
@@ -93,7 +110,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     {
         $key = $this->key($id);
         $data = $this->redis->get($key);
-        $this->redis->expire($key, $this->shr_ttl);
+        $this->redis->expire($key, $this->config->redis_session_server_ttl);
         return $data;
     }
 
@@ -110,7 +127,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     {
         $key = $this->key($id);
         $this->redis->set($key, $data);
-        $this->redis->expire($key, $this->shr_ttl);
+        $this->redis->expire($key, $this->config->redis_session_server_ttl);
+        return true;
     }
 
 
@@ -125,6 +143,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     {
         $key = $this->key($id);
         $this->redis->del($key);
+        setcookie(session_name(), '', time()-3600);
+        return true;
     }
 
 
