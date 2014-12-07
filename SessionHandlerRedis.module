@@ -63,8 +63,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
     public function __construct()
     {
         parent::__construct();
-        $this->set('useIP', 0); // track IP address?
-        $this->set('useUA', 0); // track query string?
+        /* $this->set('useIP', 0); // track IP address? */
+        /* $this->set('useUA', 0); // track query string? */
     }
 
 
@@ -165,20 +165,20 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f = $m->get("InputfieldMarkup");
         $f->label = __("Redis Configuration Notes.", __FILE__);
         $f->value = __(
-            "<p>Please supply details of the Redis server you'd like to host your thread-safe counters on.<br>" .
+            "<p>Please supply details of the Redis server you'd like to host your sessions on.<br>" .
             "By default Redis listens on 127.0.0.1 port 6379 but is often listening on specific IP addresses.</p>",
             __FILE__);
         $fields->add($f);
 
         $f = $m->get("InputfieldText");
-        $f->attr('name', 'shr_redis_server_ip');
-        $f->attr('value', $data['shr_redis_server_ip']);
+        $f->attr('name', 'shr_server_ip');
+        $f->attr('value', $data['shr_server_ip']);
         $f->label = __("The IPv4 address of the Redis server hosting your counters.", __FILE__);
         $fields->add($f);
 
         $f = $m->get("InputfieldInteger");
-        $f->attr('name', 'shr_redis_server_port');
-        $f->attr('value', $data['shr_redis_server_port']);
+        $f->attr('name', 'shr_server_port');
+        $f->attr('value', $data['shr_server_port']);
         $f->label = __("The port that your Redis server is listening on.", __FILE__);
         $fields->add($f);
 
