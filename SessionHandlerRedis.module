@@ -22,7 +22,7 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-class SessionHandlerRedis extends WireSessionHandler implements Module/*, ConfigurableModule */
+class SessionHandlerRedis extends WireSessionHandler implements Module/*, ConfigurableModule*/
 {
 
     public static function getModuleInfo()
@@ -49,10 +49,9 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     /**
      *
      */
-    public function open($path, $name)
+    protected static function _open($redis)
     {
-        if (null === $this->redis) {
-
+        if (null === $redis) {
             // Read/set the config values from the defaults if not defined in the config file...
             if (!$this->config->has('redis_session_server_ip')) {
                 $this->config->set('redis_session_server_ip', '127.0.0.1');
@@ -74,15 +73,28 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
                 $this->config->set('redis_session_server_prefix', 'PHPSESSID:');
             }
 
-            $this->redis = new \Redis();
-            $this->redis->pconnect($this->config->redis_session_server_ip, $this->config->redis_session_server_port);
-            $this->redis->select($this->config->redis_session_server_db);
+            $redis = new \Redis();
+            $redis->pconnect($this->config->redis_session_server_ip, $this->config->redis_session_server_port);
+            $redis->select($this->config->redis_session_server_db);
         }
 
+        return $redis;
+    }
+
+
+    /**
+     * Open a connection to our redis server.
+     */
+    public function open($path, $name)
+    {
+        $this->redis = self::_open($this->redis);
         return true;
     }
 
 
+    /**
+     * Close the connection to our redis server.
+     */
     public function close() {
         if (null !== $this->redis) {
             unset($this->redis);
@@ -93,6 +105,9 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     }
 
 
+    /**
+     * Generate a key for storage of the given session ID.
+     */
     protected function key($id)
     {
         return $this->config->redis_session_server_prefix . $id;
@@ -165,52 +180,41 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
      * Session Handler Redis configuration options
      *
      */
-    /* public static function getModuleConfigInputfields(array $data) */
-    /* { */
-    /*     $fields = new InputfieldWrapper(); */
-    /*     $data   = array_merge(self::$defaultSettings, $data); */
-    /*     $m      = wire('modules'); */
+    public static function getModuleConfigInputfields(array $data)
+    {
+        $fields = new InputfieldWrapper();
+        $m      = wire('modules');
+        $c      = wire('config');
 
-    /*     $f = $m->get("InputfieldMarkup"); */
-    /*     $f->label = __("Redis Configuration Notes.", __FILE__); */
-    /*     $f->value = __( */
-    /*         "<p>Please supply details of the Redis server you'd like to host your sessions on.<br>" . */
-    /*         "By default Redis listens on 127.0.0.1 port 6379 but is often listening on specific IP addresses.</p>", */
-    /*         __FILE__); */
-    /*     $fields->add($f); */
+        try {
+            $redis = self::_open(null);
+            $redis_ok = true;
+        } catch (\Exception $e) {
+            $redis_ok = false;
+        }
 
-    /*     $f = $m->get("InputfieldText"); */
-    /*     $f->attr('name', 'shr_server_ip'); */
-    /*     $f->attr('value', $data['shr_server_ip']); */
-    /*     $f->label = __("The IPv4 address of the Redis server hosting your sessions.", __FILE__); */
-    /*     $fields->add($f); */
+        $string[] = __("Server IP address:", __FILE__) . ' ' . $c->redis_session_server_ip;
+        $string[] = __("Server port:", __FILE__) . ' ' . $c->redis_session_server_port;
+        $string[] = __("Server DB number (zero-based index integer.):", __FILE__) . ' ' .$c->redis_session_server_db;
+        $string[] = __("Session prefix for redis key generation:", __FILE__) . ' ' . $c->redis_session_server_prefix;
+        $string[] = __("TTL for session strings:", __FILE__) . ' ' . $c->redis_session_server_ttl;
 
-    /*     $f = $m->get("InputfieldInteger"); */
-    /*     $f->attr('name', 'shr_server_port'); */
-    /*     $f->attr('value', $data['shr_server_port']); */
-    /*     $f->label = __("The port that your Redis server is listening on.", __FILE__); */
-    /*     $fields->add($f); */
+        $string = "<p>" . __("Configuration details for redis access are as follows...", __FILE__) . "</p>" .
+                  "<ul>\n<li>" . implode("</li>\n<li>", $string) . "</li>\n</ul>\n";
 
-    /*     $f = $m->get("InputfieldInteger"); */
-    /*     $f->attr('name', 'shr_server_db'); */
-    /*     $f->attr('value', $data['shr_server_db']); */
-    /*     $f->label = __("The redis database to use for storing session entries. If in doubt leave as '0'.", __FILE__); */
-    /*     $fields->add($f); */
+        $f = $m->get("InputfieldMarkup");
+        $f->label = __("Redis Session Storage Notes.", __FILE__);
+        if ($redis_ok) {
+            $status = __( "Access to a redis server was successful.", __FILE__);
+        } else {
+            $status = __( "<strong>WARNING!</strong> access to a redis server is needed.</strong>", __FILE__);
+        }
+        $f->value = "<p>$status</p>". $string;
 
-    /*     $f = $m->get("InputfieldText"); */
-    /*     $f->attr('name', 'shr_prefix'); */
-    /*     $f->attr('value', $data['shr_prefix']); */
-    /*     $f->label = __("What prefix is to be used when creating the redis storage key from a session ID?", __FILE__); */
-    /*     $fields->add($f); */
+        $fields->add($f);
 
-    /*     $f = $m->get("InputfieldInteger"); */
-    /*     $f->attr('name', 'config->redis_session_server_ttl'); */
-    /*     $f->attr('value', $data['config->redis_session_server_ttl']); */
-    /*     $f->label = __("How long (in seconds) should idle sessions live for before they die?", __FILE__); */
-    /*     $fields->add($f); */
-
-    /*     return $fields; */
-    /* } */
+        return $fields;
+    }
 
 
     /**
