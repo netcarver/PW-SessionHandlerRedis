@@ -9,6 +9,29 @@
  * @see /wire/core/SessionHandler.php
  * @see /wire/modules/Session/SessionHandlerDB.module
  *
+ *
+ * PRE-REQUISITES
+ * ==============
+ *
+ * This module requires that a redis server be contactable from the machine running ProcessWire and also requires the
+ * Predis module to be installed.
+ *
+ *
+ * CONFIGURATION
+ * =============
+ *
+ * By default the module will attempt to connect to redis on 127.0.0.1 using the default redis port of 6379. It will use
+ * a TTL of 30 mins (1800seconds) for all session keys and will prefix them with PHPSESSID: and store them all in the
+ * default redis DB (number 0).
+ *
+ * You can change any of these defaults by adding the following lines to your config.php file (adjusting as needed)...
+ * $redis_session_server_ip     = '127.0.0.1';
+ * $redis_session_server_port   = 6379;
+ * $redis_session_server_db     = 0;
+ * $redis_session_server_prefix = "PHPSESSID:";
+ * $redis_session_server_ttl    = 1800;
+ *
+ *
  * Copyright (c) 2014 Stephen Dickinson, QBox.
  *
  * The above copyright notice and the following permissions and disclaimer shall be included in all copies or
@@ -22,7 +45,7 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-class SessionHandlerRedis extends WireSessionHandler implements Module/*, ConfigurableModule*/
+class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule
 {
 
     public static function getModuleInfo()
@@ -52,30 +75,31 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     protected static function _open($redis)
     {
         if (null === $redis) {
+            $c = wire('config');
             // Read/set the config values from the defaults if not defined in the config file...
-            if (!$this->config->has('redis_session_server_ip')) {
-                $this->config->set('redis_session_server_ip', '127.0.0.1');
+            if (!$c->has('redis_session_server_ip')) {
+                $c->set('redis_session_server_ip', '127.0.0.1');
             }
 
-            if (!$this->config->has('redis_session_server_port')) {
-                $this->config->set('redis_session_server_port', 6379);
+            if (!$c->has('redis_session_server_port')) {
+                $c->set('redis_session_server_port', 6379);
             }
 
-            if (!$this->config->has('redis_session_server_db')) {
-                $this->config->set('redis_session_server_db', 0);
+            if (!$c->has('redis_session_server_db')) {
+                $c->set('redis_session_server_db', 0);
             }
 
-            if (!$this->config->has('redis_session_server_ttl')) {
-                $this->config->set('redis_session_server_ttl', 1800);
+            if (!$c->has('redis_session_server_ttl')) {
+                $c->set('redis_session_server_ttl', 1800);
             }
 
-            if (!$this->config->has('redis_session_server_prefix')) {
-                $this->config->set('redis_session_server_prefix', 'PHPSESSID:');
+            if (!$c->has('redis_session_server_prefix')) {
+                $c->set('redis_session_server_prefix', 'PHPSESSID:');
             }
 
             $redis = new \Redis();
-            $redis->pconnect($this->config->redis_session_server_ip, $this->config->redis_session_server_port);
-            $redis->select($this->config->redis_session_server_db);
+            $redis->pconnect($c->redis_session_server_ip, $c->redis_session_server_port);
+            $redis->select($c->redis_session_server_db);
         }
 
         return $redis;
@@ -88,6 +112,11 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     public function open($path, $name)
     {
         $this->redis = self::_open($this->redis);
+
+        if (null !== $this->redis) {
+            // Disable this module with an error?
+        }
+
         return true;
     }
 
@@ -176,6 +205,39 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     }
 
 
+    public function ___install()
+    {
+        // Force a non-connection error to be thrown if the current config doesn't lead to a redis connection.
+        try {
+            $redis = self::_open(null);
+        } catch (\Exception $e) {
+            $setup = self::getSetup();
+            $setup = implode(", ", $setup);
+            $msg = __("Aborting redis session store installation. Please adjust settings in your config file - see the comments in SessionHandlerRedis.module for more information. Settings... ", __FILE__)." $setup";
+
+            throw new \WireException($msg);
+        }
+
+        $this->message(__("Redis connection OK.", __FILE__));
+    }
+
+
+
+    public static function getSetup()
+    {
+        $c = wire('config');
+
+        $setup['ip']     = __("Server IP address:", __FILE__) . ' ' . $c->redis_session_server_ip;
+        $setup['port']   = __("Server port:", __FILE__) . ' ' . $c->redis_session_server_port;
+        $setup['db']     = __("Server DB number (zero-based index integer.):", __FILE__) . ' ' .$c->redis_session_server_db;
+        $setup['prefix'] = __("Session prefix for redis key generation:", __FILE__) . ' "' . $c->redis_session_server_prefix . '"';
+        $setup['ttl']    = __("TTL for session strings:", __FILE__) . ' ' . $c->redis_session_server_ttl;
+
+        return $setup;
+    }
+
+
+
     /**
      * Session Handler Redis configuration options
      *
@@ -184,7 +246,6 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
     {
         $fields = new InputfieldWrapper();
         $m      = wire('modules');
-        $c      = wire('config');
 
         try {
             $redis = self::_open(null);
@@ -193,14 +254,10 @@ class SessionHandlerRedis extends WireSessionHandler implements Module/*, Config
             $redis_ok = false;
         }
 
-        $string[] = __("Server IP address:", __FILE__) . ' ' . $c->redis_session_server_ip;
-        $string[] = __("Server port:", __FILE__) . ' ' . $c->redis_session_server_port;
-        $string[] = __("Server DB number (zero-based index integer.):", __FILE__) . ' ' .$c->redis_session_server_db;
-        $string[] = __("Session prefix for redis key generation:", __FILE__) . ' ' . $c->redis_session_server_prefix;
-        $string[] = __("TTL for session strings:", __FILE__) . ' ' . $c->redis_session_server_ttl;
+        $setup = self::getSetup();
 
         $string = "<p>" . __("Configuration details for redis access are as follows...", __FILE__) . "</p>" .
-                  "<ul>\n<li>" . implode("</li>\n<li>", $string) . "</li>\n</ul>\n";
+                  "<ul>\n<li>" . implode("</li>\n<li>", $setup) . "</li>\n</ul>\n";
 
         $f = $m->get("InputfieldMarkup");
         $f->label = __("Redis Session Storage Notes.", __FILE__);
