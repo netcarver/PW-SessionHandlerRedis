@@ -106,10 +106,15 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
      */
     public function open($path, $name)
     {
-        $this->redis = self::_open($this->redis);
+        try {
+            $this->redis = self::_open($this->redis);
+        } catch (Exception $e) {
+            return false;
+        }
 
         if (null !== $this->redis) {
             // Disable this module with an error?
+            return false;
         }
 
         return true;
