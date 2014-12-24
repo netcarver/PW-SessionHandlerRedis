@@ -47,7 +47,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
     {
         return array(
             'title'    => __('Session Handler Redis', __FILE__),
-            'version'  => 1,
+            'version'  => 50,
             'summary'  => __("Installing this module makes ProcessWire store sessions in a Redis database rather than the file system. Note that this module will log you out after install or uninstall.", __FILE__),
             'author'   => 'S. Dickinson, QBox.co',
             'autoload' => true,
