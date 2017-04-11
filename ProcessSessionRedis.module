@@ -1,0 +1,192 @@
+<?php namespace ProcessWire;
+
+/**
+ * ProcessWire Session Viewer
+ *
+ * This module accompanies installation of the SessionHandlerRedis module
+ *
+ *
+ */
+
+class ProcessSessionRedis extends Process {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => __('Active Sessions', __FILE__), // getModuleInfo title          
+			'summary' => __('Enables you to browse active redis sessions.', __FILE__), // getModuleInfo summary 
+			'version' => 1, 
+			'permanent' => false, 
+			'icon' => 'dashboard', 
+			'requires' => array('SessionHandlerRedis'),
+			);
+	}
+
+	const pageName = 'sessions-redis';
+
+	public function init() {
+		return parent::init();
+	}
+
+	public function ___execute() {
+
+		$sessionHandlerRedis = $this->modules->get('SessionHandlerRedis'); 
+		$useIP = $sessionHandlerRedis->useIP;
+		$useUA = $sessionHandlerRedis->useUA;
+		$expiry = $sessionHandlerRedis->expire;
+		$prefix = $sessionHandlerRedis->prefix;
+
+		$mins = $this->input->post->mins;
+		if(!$mins) $mins = (int) $this->session->ProcessSessionRedis_mins; 
+		if(!$mins) $mins = 5; 
+		$this->session->ProcessSessionRedis_mins = $mins;
+
+		$form = $this->wire('modules')->get('InputfieldForm');
+		
+		$field = $this->wire('modules')->get('InputfieldInteger');
+		$field->attr('name', 'mins'); 
+		$field->attr('value', $mins);
+		$field->label = sprintf($this->_n('Sessions active in last minute', 'Sessions active in last %d minutes', $mins), $mins); 
+		$field->description = $this->_('Number of minutes'); 
+		$field->collapsed = Inputfield::collapsedYes; 
+		$form->add($field);
+
+		$pagePaths = array();
+		$userNames = array();
+		$limit = 500; 
+
+		$sessions = array();
+		$this->redis = $sessionHandlerRedis->connect();
+
+		$time = time();
+		$sessions = $this->redis->zRangeByScore('ts', $time-$mins*60, $time+10);
+		$numRows = sizeof($sessions);
+		function expireTS(HookEvent $e) {
+		    $this->redis->zRemRangeByScore('ts', time()-$expiry, time());
+		}
+		wire()->addHook('LazyCron::everyDay', null, 'expireTS');
+		if($numRows) {
+			if($numRows == $limit) {
+				$numRows = $sessionHandlerRedis->getNumSessions($mins * 60); 		
+			}
+
+			$table = $this->wire('modules')->get('MarkupAdminDataTable');
+			$header = array(
+				$this->_('Time'), 
+				$this->_('User'), 
+				$this->_('Page'),
+				); 
+			if($useIP) $header[] = $this->_('IP Addr');
+			if($useUA) $header[] = $this->_('User Agent');
+			$table->headerRow($header);
+
+			foreach ($sessions as $key => $s) {
+				$s = $prefix.$s;
+				extract($sessionHandlerRedis->getSessionData($s)); 
+
+				if(isset($userNames[$user_id])) {
+					$userName = $userNames[$user_id];
+
+				} else {
+					$user = $this->wire('users')->get($user_id);
+					$userName = $user && $user->id ? $user->name : '.';
+					$userNames[$user_id] = $userName;
+				}
+
+				if(isset($pagePaths[$page_id])) {
+					$pagePath = $pagePaths[$page_id]; 
+
+				} else {
+					$page = $this->wire('pages')->get($page_id);
+					$pagePath = $page->id ? $page->path : '.';
+					$pagePaths[$page_id] = $pagePath;
+				}
+
+				$tr = array(wireRelativeTimeStr($ts), $userName, $pagePath);
+				if($useIP) $tr[] = long2ip($ip);
+				if($useUA) $tr[] = strip_tags($ua);
+				
+				$table->row($tr);
+			}
+			
+			$tableOut = $table->render();
+
+		} else {
+			$tableOut = "<p class='description'>" . $this->_('No active sessions') . "</p>";
+		}
+		
+		$out =
+			"<h2>" .
+			"<i id='SessionListIcon' class='fa fa-2x fa-fw fa-dashboard ui-priority-secondary'></i> " .
+			sprintf($this->_n('%d active session', '%d active sessions', $numRows), $numRows) .
+			"</h2>" .
+			$tableOut; 
+		
+		if($this->wire('config')->ajax) return $out;
+
+		$markup = $this->wire('modules')->get('InputfieldMarkup');
+		$markup->value = "<div id='SessionList'>$out</div>";
+		$form->add($markup);
+
+		/** @var InputfieldSubmit $submit */
+		$submit = $this->wire('modules')->get('InputfieldSubmit');
+		$submit->attr('value', $this->_('Refresh'));
+		$submit->icon = 'refresh';
+		$submit->attr('id+name', 'submit_session');
+		$submit->showInHeader();
+		$form->add($submit);
+		
+		return $form->render();
+	}	
+
+	/**
+	 * Called only when your module is installed
+	 *
+	 * This version creates a new page with this Process module assigned. 
+	 *
+	 */
+	public function ___install() {
+
+		// create the page our module will be assigned to
+		$page = $this->wire('pages')->newPage();
+		$page->template = 'admin';
+		$page->name = self::pageName;
+
+		// installs to the admin "Setup" menu ... change as you see fit
+		$page->parent = $this->pages->get($this->config->adminRootPageID)->child('name=setup');
+		$page->process = $this;
+
+		// we will make the page title the same as our module title
+		// but you can make it whatever you want
+		$info = self::getModuleInfo();
+		$page->title = $info['title'];
+
+		// save the page
+		$page->save();
+
+		// tell the user we created this page
+		$this->message("Created Page: {$page->path}");
+	}
+
+	/**
+	 * Called only when your module is uninstalled
+	 *
+	 * This should return the site to the same state it was in before the module was installed. 
+	 *
+	 */
+	public function ___uninstall() {
+
+		// find the page we installed, locating it by the process field (which has the module ID)
+		// it would probably be sufficient just to locate by name, but this is just to be extra sure.
+		$moduleID = $this->modules->getModuleID($this);
+		$page = $this->pages->get("template=admin, process=$moduleID, name=" . self::pageName);
+
+		if($page->id) {
+			// if we found the page, let the user know and delete it
+			$this->message("Deleting Page: {$page->path}");
+			$page->delete();
+		}
+	}
+
+
+}
+
