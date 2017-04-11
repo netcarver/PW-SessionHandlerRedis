@@ -48,7 +48,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $this->port = (!$this->configData["port"])?6379:$this->configData["port"];
         $this->dbi = (!$this->configData["dbi"])?180000:$this->configData["dbi"];
         $this->expire = (!$this->configData["expire"])?180000:$this->configData["expire"];
-        $this->prefix = (!$this->configData["prefix"])?'SESSION:':$this->configData["prefix"];
+        $this->prefix = (!$this->configData["prefix"])?'PHPSESSID:':$this->configData["prefix"];
 
         $redis = new \Redis();
         $connected = @$redis->pconnect($this->host, $this->port, 1);
@@ -222,7 +222,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f->label = __('Prefix');
         $f->description = __('This is the prefix for redis key generation.');
         $f->attr('id+name', 'prefix');
-        $f->attr('value', empty($data['prefix']) ? 'SESSION:' : $data['prefix']);
+        $f->attr('value', empty($data['prefix']) ? 'PHPSESSID:' : $data['prefix']);
         $form->add($f);
 
         $f = $m->get("InputfieldText");
