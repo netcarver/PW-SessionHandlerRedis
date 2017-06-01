@@ -9,24 +9,77 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 
 	public static function getModuleInfo() {
 		return array(
-			'title' => 'Session Handler DB Redis', 
-			'version' => 0.1, 
+			'title' => 'Session Handler Redis', 
+			'version' => 0.2, 
 			'summary' => "Installing this module makes ProcessWire store sessions in the redis rather than the file system. Note that this module will log you out after install or uninstall.",
 			'installs' => array('ProcessSessionRedis')
 			);
 	}
 
+	/**
+     * @var \Redis $redis
+     */
 	protected $redis; 
 
-	public function __construct() {
+	/**
+     * lock flag
+     * @var bool
+     */
+    protected $locked;
+
+    /**
+     * Key for the lock record
+     * @var string
+     */
+    private $lockedKey;
+
+    /**
+     * Token for the lock record
+     * @var string
+     */
+    private $lockedToken;
+
+    /**
+     * The time between attempts to unlock
+     * @var int
+     */
+    private $lockRetryDelay;
+	/**
+     * Max time (in seconds) to hold the session locked
+     * Should to be lower than execution_max_time
+     *
+     * @var int
+     */
+    private $lock_ttl;
+
+    const DEFAULT_MAX_EXECUTION_TIME = 20;
+
+	/**
+	 * Construct
+	 *
+	 */
+	public function __construct($retryDelay = 150000) {
 		parent::__construct();
-		$this->redis = $this->connect();
+		
+		// Read/set the config values from the defaults if not defined in the config file...
+        $this->configData = wire('modules')->getModuleConfigData($this);
+        $this->host = (!$this->configData["host"])?'127.0.0.1':$this->configData["host"];
+        $this->port = (!$this->configData["port"])?6379:$this->configData["port"];
+        $this->dbi = (!$this->configData["dbi"])?0:$this->configData["dbi"];
+        $this->expire = (!$this->configData["expire"])?180000:$this->configData["expire"];
+        $this->prefix = (!$this->configData["prefix"])?'SESSION:':$this->configData["prefix"];
+
+        $this->redis = $this->connect();
+        $this->lockRetryDelay = $retryDelay;
+        $this->lockedKey = null;
+        $this->locked = false;
+
+        $this->lock_ttl = ini_get('max_execution_time') ? ini_get('max_execution_time') * 0.7 : self::DEFAULT_MAX_EXECUTION_TIME;
 	}
 	
 	public function init() {
 		parent::init();
 		$this->wire('session')->set($this, 'ts', time()); 
-		
 	}
 
     protected function key($id)
@@ -42,14 +95,6 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
     }
 
     public function connect(){
-        $this->configData = wire('modules')->getModuleConfigData($this);
-
-        $this->host = (!$this->configData["host"])?'127.0.0.1':$this->configData["host"];
-        $this->port = (!$this->configData["port"])?6379:$this->configData["port"];
-        $this->dbi = (!$this->configData["dbi"])?180000:$this->configData["dbi"];
-        $this->expire = (!$this->configData["expire"])?180000:$this->configData["expire"];
-        $this->prefix = (!$this->configData["prefix"])?'PHPSESSID:':$this->configData["prefix"];
-
         $redis = new \Redis();
         $connected = @$redis->pconnect($this->host, $this->port, 1);
         if(!$connected){
@@ -71,10 +116,14 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 	 *
 	 */
 	public function read($id) {
+        if (!$this->locked) {
+            if (!$this->lockSession($id)) {
+                return '';
+            }
+        }
         $key = $this->key($id);
-    	$data = $this->redis->hGet($this->prefix.$key, 'session');
+    	$data = $this->redis->hGet($this->prefix.$key, 'session')?: '';
         $this->redis->expire($this->prefix.$key, $this->expire);
-        if(empty($data)) $data = '';
         return $data;
 	}
 
@@ -92,7 +141,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 		$user_id = $user && $user->id ? (int) $user->id : 0; 
 		$pages_id = $page && $page->id ? (int) $page->id : 0;
 		$ua = ($this->useUA && isset($_SERVER['HTTP_USER_AGENT'])) ? substr(strip_tags($_SERVER['HTTP_USER_AGENT']), 0, 255) : '';
-		$ip = $this->useIP ? ((int) $this->wire('session')->getIP(true)) : '';
+		$ip = $this->useIP ? ($this->forwardIP? ((int) $this->wire('session')->getIP(true,2)) : ((int) $this->wire('session')->getIP(true)) ) : '';
 		$time = time();
         $key = $this->key($id);
         $values = array(
@@ -113,6 +162,15 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         return true;
 	}
 
+	public function close()
+    {
+        if ($this->locked) {
+            $this->unlockSession();
+        }
+
+        return true;
+    }
+
 	/**
 	 * Destroy the session indicated by the given session ID
 	 *
@@ -125,6 +183,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $this->redis->del($key);
         $secure = $this->wire('config')->sessionCookieSecure ? (bool) $this->config->https : false;
 		setcookie(session_name(), '', time()-42000, '/', $this->config->sessionCookieDomain, $secure, true);
+		$this->close();
+
         return true;
 	}
 
@@ -139,8 +199,67 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 	}
 
 	/**
-	 * Install sessions table
+	 * Lock Session
 	 *
+	 * @param string $id Session ID
+	 * @return bool True on success, false on failure
+	 *
+	 */
+	private function lockSession($id) {
+        $lockRetryCount = (1000000 / $this->lockRetryDelay) * $this->lock_ttl;
+
+        $this->lockedKey = $id . '.lock';
+        $this->lockedToken = uniqid();
+
+        for ($i = 0; $i < $lockRetryCount; ++$i) {
+
+            $success = $this->redis->set(
+                $this->prefix.$this->lockedKey,
+                $this->lockedToken,
+                array('NX', 'EX' => $this->expire)
+            // NX = if not already exist
+            // EX = Expire setting in seconds
+            );
+
+            if ($success) {
+                $this->locked = true;
+                return true;
+            }
+
+            usleep(mt_rand(floor($this->lockRetryDelay / 2), $this->lockRetryDelay));
+        }
+
+        return false;
+    }
+
+    /**
+	 * Unlock Session
+	 *
+	 * @return bool True on success, false on failure
+	 *
+	 */
+    private function unlockSession() {
+        // If we have the right token, then delete the lock
+        $script = <<<LUA
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+LUA;
+
+        $this->redis->eval($script, array(
+            $this->prefix.$this->lockedKey,
+            $this->lockedToken
+        ), 1);
+
+        $this->locked = false;
+        $this->lockedToken = null;
+    }
+
+	/**
+	 * Install module: check the availability of phpredis and local redis for fallback
+	 * system will be broken if the redis connection fail without fallback
 	 */
 	public function ___install() {
         // check if phpredis installed
@@ -163,7 +282,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 	}
 
 	/**
-	 * Drop sessions table
+	 * 
 	 *
 	 */
 	public function ___uninstall() {
@@ -222,7 +341,7 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f->label = __('Prefix');
         $f->description = __('This is the prefix for redis key generation.');
         $f->attr('id+name', 'prefix');
-        $f->attr('value', empty($data['prefix']) ? 'PHPSESSID:' : $data['prefix']);
+        $f->attr('value', empty($data['prefix']) ? 'SESSION:' : $data['prefix']);
         $form->add($f);
 
         $f = $m->get("InputfieldText");
@@ -239,6 +358,16 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
         $f->attr('checked', empty($data['useIP']) ? '' : 'checked'); 
         $f->label = $this->_('Track IP addresses in session data?');
         $f->description = $description;
+        $form->add($f);
+
+        $description = $this->_('Checking this box will enable using forwarded IP instead of normal remote IP. You may want to enable this if the HTTP end point is else where.');
+        $f = $m->get('InputfieldCheckbox'); 
+        $f->attr('name', 'forwardIP'); 
+        $f->attr('value', 0);
+        $f->attr('checked', empty($data['forwardIP']) ? '' : 'checked'); 
+        $f->label = $this->_('Use forwarded IP?');
+        $f->description = $description;
+        $f->showIf = "useIP=1";
         $form->add($f);
 
         $f = $m->get('InputfieldCheckbox'); 
@@ -352,6 +481,4 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 		$row = $this->redis->hmget($sessionID, $request);
 		return $row;
 	}
-
-
 }
