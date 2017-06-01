@@ -1,250 +1,301 @@
-<?php
+<?php namespace ProcessWire;
 
 /**
  * Session handler for storing sessions to Redis
  *
- * Redis is an extremely fast in-memory data-store. Using it allows PW installations running on different machines to
- * access a centralised session server.
- *
- * @see /wire/core/SessionHandler.php
- * @see /wire/modules/Session/SessionHandlerDB.module
- *
- *
- * PRE-REQUISITES
- * ==============
- *
- * This module requires that a redis server be contactable from the machine running ProcessWire and also requires the
- * Predis module to be installed.
- *
- *
- * CONFIGURATION
- * =============
- *
- * By default the module will attempt to connect to redis on 127.0.0.1 using the default redis port of 6379. It will use
- * a TTL of 30 mins (1800seconds) for all session keys and will prefix them with PHPSESSID: and store them all in the
- * default redis DB (number 0).
- *
- * You can change any of these defaults by adding the following lines to your config.php file (adjusting as needed)...
- * $redis_session_server_ip     = '127.0.0.1';
- * $redis_session_server_port   = 6379;
- * $redis_session_server_db     = 0;
- * $redis_session_server_prefix = "PHPSESSID:";
- * $redis_session_server_ttl    = 1800;
- *
- *
- * License
- * =======
- *
- * Copyright (c) 2014 Stephen Dickinson, QBox.
- * GPLv2 or higher.
- *
  */
 
-class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule
-{
+class SessionHandlerRedis extends WireSessionHandler implements Module, ConfigurableModule {
 
-    public static function getModuleInfo()
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Session Handler Redis', 
+			'version' => 0.2, 
+			'summary' => "Installing this module makes ProcessWire store sessions in the redis rather than the file system. Note that this module will log you out after install or uninstall.",
+			'installs' => array('ProcessSessionRedis')
+			);
+	}
+
+	/**
+     * @var \Redis $redis
+     */
+	protected $redis; 
+
+	/**
+     * lock flag
+     * @var bool
+     */
+    protected $locked;
+
+    /**
+     * Key for the lock record
+     * @var string
+     */
+    private $lockedKey;
+
+    /**
+     * Token for the lock record
+     * @var string
+     */
+    private $lockedToken;
+
+    /**
+     * The time between attempts to unlock
+     * @var int
+     */
+    private $lockRetryDelay;
+	/**
+     * Max time (in seconds) to hold the session locked
+     * Should to be lower than execution_max_time
+     *
+     * @var int
+     */
+    private $lock_ttl;
+
+    const DEFAULT_MAX_EXECUTION_TIME = 20;
+
+	/**
+	 * Construct
+	 *
+	 */
+	public function __construct($retryDelay = 150000) {
+		parent::__construct();
+		
+		// Read/set the config values from the defaults if not defined in the config file...
+        $this->configData = wire('modules')->getModuleConfigData($this);
+        $this->host = (!$this->configData["host"])?'127.0.0.1':$this->configData["host"];
+        $this->port = (!$this->configData["port"])?6379:$this->configData["port"];
+        $this->dbi = (!$this->configData["dbi"])?0:$this->configData["dbi"];
+        $this->expire = (!$this->configData["expire"])?180000:$this->configData["expire"];
+        $this->prefix = (!$this->configData["prefix"])?'SESSION:':$this->configData["prefix"];
+
+        $this->redis = $this->connect();
+        $this->lockRetryDelay = $retryDelay;
+        $this->lockedKey = null;
+        $this->locked = false;
+
+        $this->lock_ttl = ini_get('max_execution_time') ? ini_get('max_execution_time') * 0.7 : self::DEFAULT_MAX_EXECUTION_TIME;
+	}
+	
+	public function init() {
+		parent::init();
+		$this->wire('session')->set($this, 'ts', time()); 
+	}
+
+    protected function key($id)
     {
-        return array(
-            'title'    => __('Session Handler Redis', __FILE__),
-            'version'  => 50,
-            'summary'  => __("Installing this module makes ProcessWire store sessions in a Redis database rather than the file system. Note that this module will log you out after install or uninstall.", __FILE__),
-            'author'   => 'S. Dickinson, QBox.co',
-            'autoload' => true,
-            'singular' => true,
-        );
+        return $id;
     }
 
-
-    /**
-     * Quick reference to redis
-     *
-     */
-    protected $redis = null;
-
-
-
-    /**
-     *
-     */
-    protected static function _open($redis)
-    {
+    protected function _open($redis) {
         if (null === $redis) {
-            $c = wire('config');
-            // Read/set the config values from the defaults if not defined in the config file...
-            if (!$c->has('redis_session_server_ip')) {
-                $c->set('redis_session_server_ip', '127.0.0.1');
-            }
-
-            if (!$c->has('redis_session_server_port')) {
-                $c->set('redis_session_server_port', 6379);
-            }
-
-            if (!$c->has('redis_session_server_db')) {
-                $c->set('redis_session_server_db', 0);
-            }
-
-            if (!$c->has('redis_session_server_ttl')) {
-                $c->set('redis_session_server_ttl', 1800);
-            }
-
-            if (!$c->has('redis_session_server_prefix')) {
-                $c->set('redis_session_server_prefix', 'PHPSESSID:');
-            }
-
-            $redis = new \Redis();
-            $redis->pconnect($c->redis_session_server_ip, $c->redis_session_server_port);
-            $redis->select($c->redis_session_server_db);
+            $redis = $this->connect();
         }
+        return $redis;
+    }
+
+    public function connect(){
+        $redis = new \Redis();
+        $connected = @$redis->pconnect($this->host, $this->port, 1);
+        if(!$connected){
+        	$redis->pconnect('127.0.0.1', $this->port);
+        	$this->connectedTo = 'localhost';
+        }else{
+        	$this->connectedTo = $this->host;
+        }
+        $redis->select($this->dbi);
 
         return $redis;
     }
 
-
-    /**
-     * Open a connection to our redis server.
-     */
-    public function open($path, $name)
-    {
-        try {
-            $this->redis = self::_open($this->redis);
-        } catch (Exception $e) {
-            return false;
+	/**
+	 * Read and return data for session indicated by $id
+	 *
+	 * @param string $id Session ID
+	 * @return string Serialized data or blank string if none
+	 *
+	 */
+	public function read($id) {
+        if (!$this->locked) {
+            if (!$this->lockSession($id)) {
+                return '';
+            }
         }
-
-        if (null !== $this->redis) {
-            // Disable this module with an error?
-            return false;
-        }
-
-        return true;
-    }
-
-
-    /**
-     * Close the connection to our redis server.
-     */
-    public function close() {
-        if (null !== $this->redis) {
-            unset($this->redis);
-            $this->redis = null;
-        }
-
-        return true;
-    }
-
-
-    /**
-     * Generate a key for storage of the given session ID.
-     */
-    protected function key($id)
-    {
-        return $this->config->redis_session_server_prefix . $id;
-    }
-
-
-    /**
-     * Read and return data for session indicated by $id
-     *
-     * @param string $id Session ID
-     * @return string Serialized data or blank string if none
-     *
-     */
-    public function read($id)
-    {
         $key = $this->key($id);
-        $data = $this->redis->get($key);
-        $this->redis->expire($key, $this->config->redis_session_server_ttl);
+    	$data = $this->redis->hGet($this->prefix.$key, 'session')?: '';
+        $this->redis->expire($this->prefix.$key, $this->expire);
         return $data;
-    }
+	}
 
-
-    /**
-     * Write the given $data for the given session ID
-     *
-     * @param string $id Session ID
-     * @param string Serialized data to write
-     * @return bool
-     *
-     */
-    public function write($id, $data)
-    {
+	/**
+	 * Write the given $data for the given session ID
+	 *
+	 * @param string $id Session ID
+	 * @param string Serialized data to write
+	 * @return bool
+	 *
+	 */
+	public function write($id, $data) {
+		$user = $this->wire('user');
+		$page = $this->wire('page');
+		$user_id = $user && $user->id ? (int) $user->id : 0; 
+		$pages_id = $page && $page->id ? (int) $page->id : 0;
+		$ua = ($this->useUA && isset($_SERVER['HTTP_USER_AGENT'])) ? substr(strip_tags($_SERVER['HTTP_USER_AGENT']), 0, 255) : '';
+		$ip = $this->useIP ? ($this->forwardIP? ((int) $this->wire('session')->getIP(true,2)) : ((int) $this->wire('session')->getIP(true)) ) : '';
+		$time = time();
         $key = $this->key($id);
-        $this->redis->set($key, $data);
-        $this->redis->expire($key, $this->config->redis_session_server_ttl);
+        $values = array(
+        	'session' => $data, 
+        	'user_id' => $user_id, 
+        	'page_id' => $pages_id,
+        	'ts' => $time
+        );
+		if($ip) {
+			$values['ip'] = $ip;
+		}
+		if($ua) {
+			$values['ua'] = $ua;
+		}
+        $this->redis->hMSet($this->prefix.$key, $values);
+        $this->redis->zAdd('ts', $time, $key);
+        $this->redis->expire($this->prefix.$key, $this->expire);
+        return true;
+	}
+
+	public function close()
+    {
+        if ($this->locked) {
+            $this->unlockSession();
+        }
+
         return true;
     }
 
-
-    /**
-     * Destroy the session indicated by the given session ID
-     *
-     * @param string $id Session ID
-     * @return bool True on success, false on failure
-     *
-     */
-    public function destroy($id)
-    {
+	/**
+	 * Destroy the session indicated by the given session ID
+	 *
+	 * @param string $id Session ID
+	 * @return bool True on success, false on failure 
+	 *
+	 */
+	public function destroy($id) {
         $key = $this->key($id);
         $this->redis->del($key);
-        setcookie(session_name(), '', time()-3600);
+        $secure = $this->wire('config')->sessionCookieSecure ? (bool) $this->config->https : false;
+		setcookie(session_name(), '', time()-42000, '/', $this->config->sessionCookieDomain, $secure, true);
+		$this->close();
+
         return true;
-    }
+	}
 
+	/**
+	 * Garbage collection: remove stale sessions
+	 *
+	 * @param int $seconds Max lifetime of a session
+	 * @return bool True on success, false on failure
+	 *
+	 */
+	public function gc($seconds) {
+	}
 
-    /**
-     * Garbage collection: remove stale sessions
-     *
-     * @param int $seconds Max lifetime of a session
-     * @return bool True on success, false on failure
-     *
-     */
-    public function gc($seconds)
-    {
-        // Intentionally empty. We use the Redis TTL feature to do garbage collection.
-    }
+	/**
+	 * Lock Session
+	 *
+	 * @param string $id Session ID
+	 * @return bool True on success, false on failure
+	 *
+	 */
+	private function lockSession($id) {
+        $lockRetryCount = (1000000 / $this->lockRetryDelay) * $this->lock_ttl;
 
+        $this->lockedKey = $id . '.lock';
+        $this->lockedToken = uniqid();
 
-    public function ___install()
-    {
-        // Force a non-connection error to be thrown if the current config doesn't lead to a redis connection.
-        try {
-            $redis = self::_open(null);
-        } catch (\Exception $e) {
-            $setup = self::getSetup();
-            $setup = implode(", ", $setup);
-            $msg = __("Aborting redis session store installation. Please adjust settings in your config file - see the comments in SessionHandlerRedis.module for more information. Settings... ", __FILE__)." $setup";
+        for ($i = 0; $i < $lockRetryCount; ++$i) {
 
-            throw new \WireException($msg);
+            $success = $this->redis->set(
+                $this->prefix.$this->lockedKey,
+                $this->lockedToken,
+                array('NX', 'EX' => $this->expire)
+            // NX = if not already exist
+            // EX = Expire setting in seconds
+            );
+
+            if ($success) {
+                $this->locked = true;
+                return true;
+            }
+
+            usleep(mt_rand(floor($this->lockRetryDelay / 2), $this->lockRetryDelay));
         }
 
-        $this->message(__("Redis connection OK.", __FILE__));
+        return false;
     }
-
-
-
-    public static function getSetup()
-    {
-        $c = wire('config');
-
-        $setup['ip']     = __("Server IP address:", __FILE__) . ' ' . $c->redis_session_server_ip;
-        $setup['port']   = __("Server port:", __FILE__) . ' ' . $c->redis_session_server_port;
-        $setup['db']     = __("Server DB number (zero-based index integer.):", __FILE__) . ' ' .$c->redis_session_server_db;
-        $setup['prefix'] = __("Session prefix for redis key generation:", __FILE__) . ' "' . $c->redis_session_server_prefix . '"';
-        $setup['ttl']    = __("TTL for session strings:", __FILE__) . ' ' . $c->redis_session_server_ttl;
-
-        return $setup;
-    }
-
-
 
     /**
-     * Session Handler Redis configuration options
-     *
-     */
-    public static function getModuleConfigInputfields(array $data)
-    {
-        $fields = new InputfieldWrapper();
+	 * Unlock Session
+	 *
+	 * @return bool True on success, false on failure
+	 *
+	 */
+    private function unlockSession() {
+        // If we have the right token, then delete the lock
+        $script = <<<LUA
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+LUA;
+
+        $this->redis->eval($script, array(
+            $this->prefix.$this->lockedKey,
+            $this->lockedToken
+        ), 1);
+
+        $this->locked = false;
+        $this->lockedToken = null;
+    }
+
+	/**
+	 * Install module: check the availability of phpredis and local redis for fallback
+	 * system will be broken if the redis connection fail without fallback
+	 */
+	public function ___install() {
+        // check if phpredis installed
+        if(!class_exists('\Redis')){
+        	$msg = __("Please install phpredis to local machine", __FILE__);
+
+            throw new \WireException($msg);
+        }else{
+        	$redis = $this->connect();
+        	if($redis->ping() == "+PONG"){
+        		$this->message(__("Redis connection OK.", __FILE__));
+        	}else{
+				$msg = __("Cannot connect to redis, please make sure redis is installed on the local machine", __FILE__);
+
+	            throw new \WireException($msg);
+        	}
+        }
+
+        
+	}
+
+	/**
+	 * 
+	 *
+	 */
+	public function ___uninstall() {
+		
+	}
+
+	/**
+	 * Session configuration options
+	 *
+	 */
+	public function getModuleConfigInputfields(array $data) {
+
+        $form = new InputfieldWrapper();
         $m      = wire('modules');
 
         try {
@@ -254,50 +305,180 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
             $redis_ok = false;
         }
 
-        $setup = self::getSetup();
-
-        $string = "<p>" . __("Configuration details for redis access are as follows...", __FILE__) . "</p>" .
-                  "<ul>\n<li>" . implode("</li>\n<li>", $setup) . "</li>\n</ul>\n";
-
         $f = $m->get("InputfieldMarkup");
-        $f->label = __("Redis Session Storage Notes.", __FILE__);
+        $f->label = __("Redis connection status", __FILE__);
         if ($redis_ok) {
-            $status = __( "Access to a redis server was successful.", __FILE__);
+            $status = "<span style='color:green'>&#10004;".__( "Connected", __FILE__)."</span>";
         } else {
-            $status = __( "<strong>WARNING!</strong> access to a redis server is needed.</strong>", __FILE__);
+            $status = "<span style='color:red'>&#10008;".__( "Connection Fail", __FILE__)."</span>";
         }
-        $f->value = "<p>$status</p>". $string;
+        $f->value = "<p>$status to $this->connectedTo</p>";
 
-        $fields->add($f);
+        $form->add($f);
 
-        return $fields;
-    }
+		$f = $m->get("InputfieldText");
+        $f->label = __('Host');
+        $f->description = __('This is the host used to connect to redis. If connection failed, fall back to localhost.');
+        $f->attr('id+name', 'host');
+        $f->attr('value', empty($data['host']) ? '127.0.0.1' : $data['host']);
+        $form->add($f);
+
+        $f = $m->get("InputfieldText");
+        $f->label = __('Port');
+        $f->description = __('This is the port used to connect to redis.');
+        $f->attr('id+name', 'port');
+        $f->attr('value', empty($data['port']) ? '6379' : $data['port']);
+        $form->add($f);
+
+        $f = $m->get("InputfieldText");
+        $f->label = __('Database Index');
+        $f->description = __('This is the redis database index.');
+        $f->attr('id+name', 'dbi');
+        $f->attr('value', empty($data['dbi']) ? 0 : $data['dbi']);
+        $form->add($f);
+
+        $f = $m->get("InputfieldText");
+        $f->label = __('Prefix');
+        $f->description = __('This is the prefix for redis key generation.');
+        $f->attr('id+name', 'prefix');
+        $f->attr('value', empty($data['prefix']) ? 'SESSION:' : $data['prefix']);
+        $form->add($f);
+
+        $f = $m->get("InputfieldText");
+        $f->label = __('Expiry');
+        $f->description = __('This is the expiry for session.');
+        $f->attr('id+name', 'expire');
+        $f->attr('value', empty($data['expire']) ? 180000 : $data['expire']);
+        $form->add($f);
+
+		$description = $this->_('Checking this box will enable the data to be displayed in your admin sessions list.');
+        $f = $m->get('InputfieldCheckbox'); 
+        $f->attr('name', 'useIP'); 
+        $f->attr('value', 1);
+        $f->attr('checked', empty($data['useIP']) ? '' : 'checked'); 
+        $f->label = $this->_('Track IP addresses in session data?');
+        $f->description = $description;
+        $form->add($f);
+
+        $description = $this->_('Checking this box will enable using forwarded IP instead of normal remote IP. You may want to enable this if the HTTP end point is else where.');
+        $f = $m->get('InputfieldCheckbox'); 
+        $f->attr('name', 'forwardIP'); 
+        $f->attr('value', 0);
+        $f->attr('checked', empty($data['forwardIP']) ? '' : 'checked'); 
+        $f->label = $this->_('Use forwarded IP?');
+        $f->description = $description;
+        $f->showIf = "useIP=1";
+        $form->add($f);
+
+        $f = $m->get('InputfieldCheckbox'); 
+        $f->attr('name', 'useUA'); 
+        $f->attr('value', 1);
+        $f->attr('checked', empty($data['useUA']) ? '' : 'checked'); 
+        $f->label = $this->_('Track user agent in session data?');
+        $f->notes = $this->_('The user agent typically contains information about the browser being used.');
+        $f->description = $description;
+        $form->add($f);
 
 
-    /**
-     * Provides direct reference access to set values in the $data array
-     *
-     * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
-     *
-     */
-    public function __set($key, $value)
-    {
-        $this->set($key, $value);
-    }
+        return $form;
+	}
+
+	/**
+	 * Provides direct reference access to set values in the $data array
+	 *
+	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+	 * 
+	 * @param string $key
+	 * @param mixed $value
+	 *
+	 */
+	public function __set($key, $value) {
+		$this->set($key, $value);
+	}
 
 
-    /**
-     * Provides direct reference access to variables in the $data array
-     *
-     * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
-     *
-     * Otherwise the same as get()
-     *
-     * @param string $key
-     *
-     */
-    public function __get($key)
-    {
-        return $this->get($key);
-    }
+	/**
+	 * Provides direct reference access to variables in the $data array
+	 *
+	 * For some reason PHP 5.4+ requires this, as it apparently doesn't see WireData
+	 *
+	 * Otherwise the same as get()
+	 *
+	 * @param string $key
+	 * @return mixed
+	 *
+	 */
+	public function __get($key) {
+		return $this->get($key);
+	}
+
+	/**
+	 * Return the number of active sessions in the last 5 mins (300 seconds)
+	 * 
+	 * @param int $seconds Optionally specify number of seconds (rather than 300, 5 minutes)
+	 * @return int
+	 * 
+	 */
+	public function getNumSessions($seconds = 300) {
+		$sessions = array();
+		
+		$it = NULL; /* Initialize our iterator to NULL */
+		while($arr_keys = $redis->scan($it, $this->prefix."*")) {
+		    foreach($arr_keys as $k) {
+		        array_push($sessions, $k);
+		    }
+		}	
+		$numSessions = sizeof($sessions);
+		return $numSessions; 
+	}
+
+	/**
+	 * Get the most recent sessions
+	 * 
+	 * Returns an array of array for each session, which includes all the 
+	 * session info except or the 'data' property. Use the getSessionData()
+	 * method to retrieve that. 
+	 * 
+	 * @param int $seconds Sessions up to this many seconds old
+	 * @param int $limit Max number of sessions to return
+	 * @return array Sessions newest to oldest
+	 * 
+	 */
+	public function getSessions($seconds = 300, $limit = 100) {
+		
+		$seconds = (int) $seconds; 
+		$limit = (int) $limit;
+		$sessions = array();
+		
+		$it = NULL; /* Initialize our iterator to NULL */
+		while($arr_keys = $redis->scan($it, $this->prefix."*", $limit)) {
+		    foreach($arr_keys as $k) {
+		        array_push($sessions, $k);
+		    }
+		}	
+		
+		return $sessions;
+	}
+
+	/**
+	 * Return all session data for the given session ID
+	 * 
+	 * Note that the 'data' property of the returned array contains the values
+	 * that the user has in their $session. 
+	 * 
+	 * @param $sessionID
+	 * @return array Blank array on fail, populated array on success. 
+	 * 
+	 */
+	public function getSessionData($sessionID) {
+		$request = array('user_id', 'page_id','ts');
+		if($this->useIP) {
+			array_push($request, 'ip');
+		}
+		if($this->useUA) {
+			array_push($request, 'ua');
+		}
+		$row = $this->redis->hmget($sessionID, $request);
+		return $row;
+	}
 }
