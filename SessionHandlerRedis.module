@@ -80,6 +80,10 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
                 $c->set('redis_session_server_port', 6379);
             }
 
+            if (!$c->has('redis_session_server_password')) {
+                $c->set('redis_session_server_password', NULL);
+            }
+
             if (!$c->has('redis_session_server_db')) {
                 $c->set('redis_session_server_db', 0);
             }
@@ -94,6 +98,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
 
             $redis = new \Redis();
             $redis->pconnect($c->redis_session_server_ip, $c->redis_session_server_port);
+	    if ($c->redis_session_server_password !== NULL)
+	    	$redis->auth ($c->redis_session_server_password);
             $redis->select($c->redis_session_server_db);
         }
 
@@ -112,8 +118,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
             return false;
         }
 
-        if (null !== $this->redis) {
-            // Disable this module with an error?
+        if (null == $this->redis) {
+            throw new WireException('Could not connect to Redis database.');
             return false;
         }
 
@@ -153,7 +159,8 @@ class SessionHandlerRedis extends WireSessionHandler implements Module, Configur
     public function read($id)
     {
         $key = $this->key($id);
-        $data = $this->redis->get($key);
+        for ($i = 0; $i < 2 && !($data = $this->redis->get($key)); $i++)
+            $this->write($id, TRUE);
         $this->redis->expire($key, $this->config->redis_session_server_ttl);
         return $data;
     }
